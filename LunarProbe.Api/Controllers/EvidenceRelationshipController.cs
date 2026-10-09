@@ -19,6 +19,13 @@ public sealed class EvidenceRelationshipsController(
             "Context"
         };
 
+    private static readonly HashSet<string> AllowedAssessmentMethods =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            "Manual",
+            "LocalAI"
+        };
+
     [HttpPost]
     public async Task<IActionResult> Create(
         Guid researchSessionId,
@@ -51,7 +58,11 @@ public sealed class EvidenceRelationshipsController(
             });
         }
 
-        if (!AllowedRelationshipTypes.Contains(request.RelationshipType ?? ""))
+        // Validate and normalize the relationship type.
+        var relationshipType = request.RelationshipType?.Trim();
+
+        if (string.IsNullOrWhiteSpace(relationshipType) ||
+            !AllowedRelationshipTypes.Contains(relationshipType))
         {
             return BadRequest(new
             {
@@ -59,6 +70,29 @@ public sealed class EvidenceRelationshipsController(
             });
         }
 
+        relationshipType = AllowedRelationshipTypes.First(type =>
+            type.Equals(
+                relationshipType,
+                StringComparison.OrdinalIgnoreCase));
+
+        // Validate and normalize the assessment method.
+        var assessmentMethod = request.AssessmentMethod?.Trim();
+
+        if (string.IsNullOrWhiteSpace(assessmentMethod) ||
+            !AllowedAssessmentMethods.Contains(assessmentMethod))
+        {
+            return BadRequest(new
+            {
+                error = "AssessmentMethod must be Manual or LocalAI."
+            });
+        }
+
+        assessmentMethod = AllowedAssessmentMethods.First(method =>
+            method.Equals(
+                assessmentMethod,
+                StringComparison.OrdinalIgnoreCase));
+
+        // Ensure the evidence document belongs to the requested session.
         var evidenceDocument = await dbContext.EvidenceDocuments
             .AsNoTracking()
             .FirstOrDefaultAsync(
@@ -83,6 +117,7 @@ public sealed class EvidenceRelationshipsController(
             });
         }
 
+        // Validate the evidence passage's starting position.
         if (request.StartOffset < 0 ||
             request.StartOffset >= evidenceDocument.Content.Length)
         {
@@ -92,6 +127,7 @@ public sealed class EvidenceRelationshipsController(
             });
         }
 
+        // Ensure the passage does not extend beyond the source document.
         if (request.EvidenceText.Length >
             evidenceDocument.Content.Length - request.StartOffset)
         {
@@ -101,6 +137,7 @@ public sealed class EvidenceRelationshipsController(
             });
         }
 
+        // Verify that the submitted passage exactly matches the source.
         var originalText = evidenceDocument.Content.Substring(
             request.StartOffset,
             request.EvidenceText.Length);
@@ -116,20 +153,34 @@ public sealed class EvidenceRelationshipsController(
             });
         }
 
+        // Reject an identical passage from the claim's own source document.
+        if (claim.EvidenceDocumentId == evidenceDocument.Id &&
+            string.Equals(
+                claim.ClaimText,
+                request.EvidenceText,
+                StringComparison.Ordinal))
+        {
+            return BadRequest(new
+            {
+                error = "A claim cannot be linked to an identical passage from its own source document."
+            });
+        }
+
         var relationship = new EvidenceRelationship
         {
             Id = Guid.NewGuid(),
             CandidateClaimId = claim.Id,
             EvidenceDocumentId = evidenceDocument.Id,
-            RelationshipType = request.RelationshipType.Trim(),
+            RelationshipType = relationshipType,
             EvidenceText = request.EvidenceText,
             StartOffset = request.StartOffset,
             Length = request.EvidenceText.Length,
-            AssessmentMethod = "Manual",
+            AssessmentMethod = assessmentMethod,
             CreatedAtUtc = DateTime.UtcNow
         };
 
         dbContext.EvidenceRelationships.Add(relationship);
+
         await dbContext.SaveChangesAsync(cancellationToken);
 
         return Created(
@@ -211,6 +262,8 @@ public sealed class CreateEvidenceRelationshipRequest
     public string EvidenceText { get; set; } = string.Empty;
 
     public int StartOffset { get; set; }
+
+    public string AssessmentMethod { get; set; } = "Manual";
 }
 
 public sealed record EvidenceRelationshipResponse(

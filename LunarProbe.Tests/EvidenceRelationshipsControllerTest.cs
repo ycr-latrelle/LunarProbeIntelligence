@@ -239,4 +239,198 @@ public sealed class EvidenceRelationshipsControllerTests
     }
 
 
+    [Fact]
+    public async Task Create_SavesLocalAIRelationship()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+
+        var options = new DbContextOptionsBuilder<LpiDbContext>()
+            .UseSqlite(connection)
+            .Options;
+
+        await using var dbContext = new LpiDbContext(options);
+        await dbContext.Database.EnsureCreatedAsync();
+
+        var (session, document, claim) = await SeedDataAsync(dbContext);
+        var controller = new EvidenceRelationshipsController(dbContext);
+
+        const string evidenceText = "Scientific claims are";
+
+        var result = await controller.Create(
+            session.Id,
+            claim.Id,
+            new CreateEvidenceRelationshipRequest
+            {
+                EvidenceDocumentId = document.Id,
+                RelationshipType = "Supports",
+                EvidenceText = evidenceText,
+                StartOffset = 0,
+                AssessmentMethod = "LocalAI"
+            },
+            CancellationToken.None);
+
+        var created = Assert.IsType<CreatedResult>(result);
+        var response = Assert.IsType<EvidenceRelationshipResponse>(created.Value);
+
+        Assert.Equal("LocalAI", response.AssessmentMethod);
+        Assert.Equal(evidenceText, response.EvidenceText);
+
+        var saved = await dbContext.EvidenceRelationships
+            .SingleAsync();
+
+        Assert.Equal(response.Id, saved.Id);
+        Assert.Equal("LocalAI", saved.AssessmentMethod);
+    }
+
+    [Fact]
+    public async Task Create_RejectsUnsupportedAssessmentMethod()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+
+        var options = new DbContextOptionsBuilder<LpiDbContext>()
+            .UseSqlite(connection)
+            .Options;
+
+        await using var dbContext = new LpiDbContext(options);
+        await dbContext.Database.EnsureCreatedAsync();
+
+        var (session, document, claim) = await SeedDataAsync(dbContext);
+        var controller = new EvidenceRelationshipsController(dbContext);
+
+        var result = await controller.Create(
+            session.Id,
+            claim.Id,
+            new CreateEvidenceRelationshipRequest
+            {
+                EvidenceDocumentId = document.Id,
+                RelationshipType = "Supports",
+                EvidenceText = "Scientific claims are",
+                StartOffset = 0,
+                AssessmentMethod = "CloudAI"
+            },
+            CancellationToken.None);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Empty(await dbContext.EvidenceRelationships.ToListAsync());
+    }
+
+
+    [Fact]
+    public async Task GetAll_ReturnsSavedRelationshipsIncludingAssessmentMethod()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+
+        var options = new DbContextOptionsBuilder<LpiDbContext>()
+            .UseSqlite(connection)
+            .Options;
+
+        await using var dbContext = new LpiDbContext(options);
+        await dbContext.Database.EnsureCreatedAsync();
+
+        var (session, document, claim) = await SeedDataAsync(dbContext);
+
+        var relationship = new EvidenceRelationship
+        {
+            Id = Guid.NewGuid(),
+            CandidateClaimId = claim.Id,
+            EvidenceDocumentId = document.Id,
+            RelationshipType = "Supports",
+            EvidenceText = "Scientific claims are",
+            StartOffset = 0,
+            Length = "Scientific claims are".Length,
+            AssessmentMethod = "LocalAI",
+            CreatedAtUtc = DateTime.UtcNow
+        };
+
+        dbContext.EvidenceRelationships.Add(relationship);
+        await dbContext.SaveChangesAsync();
+
+        var controller = new EvidenceRelationshipsController(dbContext);
+
+        var result = await controller.GetAll(
+            session.Id,
+            claim.Id,
+            CancellationToken.None);
+
+        var ok = Assert.IsType<OkObjectResult>(result);
+        var responses =
+            Assert.IsType<List<EvidenceRelationshipResponse>>(ok.Value);
+
+        var response = Assert.Single(responses);
+
+        Assert.Equal(relationship.Id, response.Id);
+        Assert.Equal(claim.Id, response.CandidateClaimId);
+        Assert.Equal(document.Id, response.EvidenceDocumentId);
+        Assert.Equal("Supports", response.RelationshipType);
+        Assert.Equal("Scientific claims are", response.EvidenceText);
+        Assert.Equal("LocalAI", response.AssessmentMethod);
+    }
+
+    [Fact]
+    public async Task GetAll_ReturnsEmptyListWhenClaimHasNoRelationships()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+
+        var options = new DbContextOptionsBuilder<LpiDbContext>()
+            .UseSqlite(connection)
+            .Options;
+
+        await using var dbContext = new LpiDbContext(options);
+        await dbContext.Database.EnsureCreatedAsync();
+
+        var (session, _, claim) = await SeedDataAsync(dbContext);
+        var controller = new EvidenceRelationshipsController(dbContext);
+
+        var result = await controller.GetAll(
+            session.Id,
+            claim.Id,
+            CancellationToken.None);
+
+        var ok = Assert.IsType<OkObjectResult>(result);
+        var responses =
+            Assert.IsType<List<EvidenceRelationshipResponse>>(ok.Value);
+
+        Assert.Empty(responses);
+    }
+
+    [Fact]
+    public async Task GetAll_RejectsClaimFromAnotherResearchSession()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+
+        var options = new DbContextOptionsBuilder<LpiDbContext>()
+            .UseSqlite(connection)
+            .Options;
+
+        await using var dbContext = new LpiDbContext(options);
+        await dbContext.Database.EnsureCreatedAsync();
+
+        var (session, _, claim) = await SeedDataAsync(dbContext);
+
+        var anotherSession = new ResearchSession
+        {
+            Id = Guid.NewGuid(),
+            ResearchQuestion = "A different research question",
+            Status = "Active"
+        };
+
+        dbContext.ResearchSessions.Add(anotherSession);
+        await dbContext.SaveChangesAsync();
+
+        var controller = new EvidenceRelationshipsController(dbContext);
+
+        var result = await controller.GetAll(
+            anotherSession.Id,
+            claim.Id,
+            CancellationToken.None);
+
+        Assert.IsType<NotFoundObjectResult>(result);
+    }
+
+
 }
