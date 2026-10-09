@@ -221,4 +221,26 @@ public class ClaimExtractionServiceTests
                 content.Substring(claim.StartOffset, claim.Length));
         }
     }
+
+    [Fact]
+    public void ExtractClaims_DoesNotSplitAtPersonInitials()
+    {
+        var content =
+            "A. Smith reported that lunar samples contain several distinct mineral compounds.";
+
+        var document = new EvidenceDocument
+        {
+            Id = Guid.NewGuid(),
+            Title = "Lunar Research",
+            Content = content
+        };
+
+        var claims = _service.ExtractClaims(document);
+
+        var claim = Assert.Single(claims);
+
+        Assert.Equal(content, claim.ClaimText);
+        Assert.Equal(0, claim.StartOffset);
+        Assert.Equal(content.Length, claim.Length);
+    }
 }

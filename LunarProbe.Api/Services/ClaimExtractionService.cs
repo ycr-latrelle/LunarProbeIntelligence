@@ -33,7 +33,7 @@ public sealed class ClaimExtractionService
                 continue;
             }
 
-            // Decimal points inside numbers are not sentence boundaries.
+            // A decimal point inside a number is not a sentence boundary.
             if (content[i] == '.' &&
                 i > 0 &&
                 i + 1 < content.Length &&
@@ -43,9 +43,10 @@ public sealed class ClaimExtractionService
                 continue;
             }
 
-            // Check abbreviations before treating a period as a boundary.
+            // Recognized abbreviations and person initials are not boundaries.
             if (content[i] == '.' &&
-                IsAbbreviationPeriod(content, i))
+                (IsAbbreviationPeriod(content, i) ||
+                 IsPersonInitialPeriod(content, i)))
             {
                 continue;
             }
@@ -130,7 +131,6 @@ public sealed class ClaimExtractionService
         string content,
         int periodIndex)
     {
-        // Read the current token, including any periods in it.
         var tokenStart = periodIndex;
 
         while (tokenStart > 0 &&
@@ -146,22 +146,61 @@ public sealed class ClaimExtractionService
             return true;
         }
 
-        // Handle the first period in abbreviations such as e.g. and i.e.
-        // For example, at "e.g.", the token at the first period is "e.".
+        // Recognize the first period in e.g. and i.e.
         if (periodIndex + 2 < content.Length &&
-            content[periodIndex + 1] != '\0' &&
             char.IsLetter(content[periodIndex + 1]) &&
             content[periodIndex + 2] == '.')
         {
-            var twoLetterAbbreviation =
+            var abbreviation =
                 content[tokenStart..(periodIndex + 3)];
 
-            if (CommonAbbreviations.Contains(twoLetterAbbreviation))
+            if (CommonAbbreviations.Contains(abbreviation))
             {
                 return true;
             }
         }
 
         return false;
+    }
+
+    private static bool IsPersonInitialPeriod(
+        string content,
+        int periodIndex)
+    {
+        // An initial is one letter preceded by whitespace or the start
+        // of the document, followed by a period and whitespace.
+        if (periodIndex == 0 ||
+            !char.IsLetter(content[periodIndex - 1]))
+        {
+            return false;
+        }
+
+        var initialStart = periodIndex - 1;
+
+        if (initialStart > 0 &&
+            !char.IsWhiteSpace(content[initialStart - 1]))
+        {
+            return false;
+        }
+
+        // Require whitespace after the period.
+        if (periodIndex + 1 >= content.Length ||
+            !char.IsWhiteSpace(content[periodIndex + 1]))
+        {
+            return false;
+        }
+
+        var next = periodIndex + 1;
+
+        while (next < content.Length &&
+               char.IsWhiteSpace(content[next]))
+        {
+            next++;
+        }
+
+        // The next token should begin with an uppercase letter,
+        // as in "A. Smith".
+        return next < content.Length &&
+               char.IsUpper(content[next]);
     }
 }
