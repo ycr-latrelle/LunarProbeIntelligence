@@ -1,4 +1,3 @@
-
 using LunarProbe.Api.Models;
 using LunarProbe.Api.Services;
 using Xunit;
@@ -84,15 +83,19 @@ public class ClaimExtractionServiceTests
         {
             Id = documentId,
             Title = "Research Notes",
-            Content = "Repeated observations can help researchers evaluate a hypothesis."
+            Content =
+                "Repeated observations can help researchers evaluate a hypothesis."
         };
 
         var claims = _service.ExtractClaims(document);
 
         Assert.NotEmpty(claims);
+
         Assert.All(
             claims,
-            claim => Assert.Equal(documentId, claim.EvidenceDocumentId));
+            claim => Assert.Equal(
+                documentId,
+                claim.EvidenceDocumentId));
     }
 
     [Fact]
@@ -130,5 +133,92 @@ public class ClaimExtractionServiceTests
         Assert.Equal(content, claim.ClaimText);
         Assert.Equal(0, claim.StartOffset);
         Assert.Equal(content.Length, claim.Length);
+    }
+
+    [Fact]
+    public void ExtractClaims_DoesNotSplitAtDecimalNumbers()
+    {
+        var content =
+            "The lunar sample measured 3.14 grams during the laboratory analysis.";
+
+        var document = new EvidenceDocument
+        {
+            Id = Guid.NewGuid(),
+            Title = "Lunar Measurements",
+            Content = content
+        };
+
+        var claims = _service.ExtractClaims(document);
+
+        var claim = Assert.Single(claims);
+
+        Assert.Equal(content, claim.ClaimText);
+        Assert.Equal(0, claim.StartOffset);
+        Assert.Equal(content.Length, claim.Length);
+    }
+
+    [Fact]
+    public void ExtractClaims_PreservesExactOffsetsAfterAbbreviation()
+    {
+        var content =
+            "Dr. Smith reported that lunar samples contain several distinct mineral compounds. " +
+            "Independent laboratories confirmed the findings using separate analytical methods.";
+
+        var document = new EvidenceDocument
+        {
+            Id = Guid.NewGuid(),
+            Title = "Lunar Research",
+            Content = content
+        };
+
+        var claims = _service.ExtractClaims(document);
+
+        Assert.Equal(2, claims.Count);
+        Assert.StartsWith("Dr. Smith", claims[0].ClaimText);
+
+        Assert.Equal(
+            claims[0].ClaimText,
+            content.Substring(
+                claims[0].StartOffset,
+                claims[0].Length));
+
+        Assert.Equal(
+            claims[1].ClaimText,
+            content.Substring(
+                claims[1].StartOffset,
+                claims[1].Length));
+    }
+
+    [Fact]
+    public void ExtractClaims_DoesNotSplitAtMultiPeriodAbbreviations()
+    {
+        var firstSentence =
+            "The analysis considered several factors, e.g. mineral composition and sample age, before reaching its conclusion.";
+
+        var secondSentence =
+            "Independent laboratories verified the results using separate analytical methods.";
+
+        var content = firstSentence + " " + secondSentence;
+
+        var document = new EvidenceDocument
+        {
+            Id = Guid.NewGuid(),
+            Title = "Lunar Analysis",
+            Content = content
+        };
+
+        var claims = _service.ExtractClaims(document);
+
+        Assert.Equal(2, claims.Count);
+
+        Assert.Equal(firstSentence, claims[0].ClaimText);
+        Assert.Equal(secondSentence, claims[1].ClaimText);
+
+        foreach (var claim in claims)
+        {
+            Assert.Equal(
+                claim.ClaimText,
+                content.Substring(claim.StartOffset, claim.Length));
+        }
     }
 }
