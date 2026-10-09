@@ -1,4 +1,3 @@
-
 using LunarProbe.Api.Data;
 using LunarProbe.Api.Models;
 using Microsoft.AspNetCore.Mvc;
@@ -58,7 +57,6 @@ public sealed class EvidenceRelationshipsController(
             });
         }
 
-        // Validate and normalize the relationship type.
         var relationshipType = request.RelationshipType?.Trim();
 
         if (string.IsNullOrWhiteSpace(relationshipType) ||
@@ -75,7 +73,6 @@ public sealed class EvidenceRelationshipsController(
                 relationshipType,
                 StringComparison.OrdinalIgnoreCase));
 
-        // Validate and normalize the assessment method.
         var assessmentMethod = request.AssessmentMethod?.Trim();
 
         if (string.IsNullOrWhiteSpace(assessmentMethod) ||
@@ -92,7 +89,6 @@ public sealed class EvidenceRelationshipsController(
                 assessmentMethod,
                 StringComparison.OrdinalIgnoreCase));
 
-        // Ensure the evidence document belongs to the requested session.
         var evidenceDocument = await dbContext.EvidenceDocuments
             .AsNoTracking()
             .FirstOrDefaultAsync(
@@ -117,7 +113,6 @@ public sealed class EvidenceRelationshipsController(
             });
         }
 
-        // Validate the evidence passage's starting position.
         if (request.StartOffset < 0 ||
             request.StartOffset >= evidenceDocument.Content.Length)
         {
@@ -127,7 +122,6 @@ public sealed class EvidenceRelationshipsController(
             });
         }
 
-        // Ensure the passage does not extend beyond the source document.
         if (request.EvidenceText.Length >
             evidenceDocument.Content.Length - request.StartOffset)
         {
@@ -137,7 +131,6 @@ public sealed class EvidenceRelationshipsController(
             });
         }
 
-        // Verify that the submitted passage exactly matches the source.
         var originalText = evidenceDocument.Content.Substring(
             request.StartOffset,
             request.EvidenceText.Length);
@@ -153,7 +146,6 @@ public sealed class EvidenceRelationshipsController(
             });
         }
 
-        // Reject an identical passage from the claim's own source document.
         if (claim.EvidenceDocumentId == evidenceDocument.Id &&
             string.Equals(
                 claim.ClaimText,
@@ -163,6 +155,17 @@ public sealed class EvidenceRelationshipsController(
             return BadRequest(new
             {
                 error = "A claim cannot be linked to an identical passage from its own source document."
+            });
+        }
+
+        var explanation = request.Explanation?.Trim() ?? string.Empty;
+
+        if (assessmentMethod == "LocalAI" &&
+            string.IsNullOrWhiteSpace(explanation))
+        {
+            return BadRequest(new
+            {
+                error = "Explanation is required for LocalAI assessments."
             });
         }
 
@@ -176,6 +179,7 @@ public sealed class EvidenceRelationshipsController(
             StartOffset = request.StartOffset,
             Length = request.EvidenceText.Length,
             AssessmentMethod = assessmentMethod,
+            Explanation = explanation,
             CreatedAtUtc = DateTime.UtcNow
         };
 
@@ -233,6 +237,7 @@ public sealed class EvidenceRelationshipsController(
                 relationship.StartOffset,
                 relationship.Length,
                 relationship.AssessmentMethod,
+                relationship.Explanation,
                 relationship.CreatedAtUtc))
             .ToListAsync(cancellationToken);
 
@@ -250,20 +255,18 @@ public sealed class EvidenceRelationshipsController(
             relationship.StartOffset,
             relationship.Length,
             relationship.AssessmentMethod,
+            relationship.Explanation,
             relationship.CreatedAtUtc);
 }
 
 public sealed class CreateEvidenceRelationshipRequest
 {
     public Guid EvidenceDocumentId { get; set; }
-
     public string RelationshipType { get; set; } = string.Empty;
-
     public string EvidenceText { get; set; } = string.Empty;
-
     public int StartOffset { get; set; }
-
     public string AssessmentMethod { get; set; } = "Manual";
+    public string Explanation { get; set; } = string.Empty;
 }
 
 public sealed record EvidenceRelationshipResponse(
@@ -275,4 +278,5 @@ public sealed record EvidenceRelationshipResponse(
     int StartOffset,
     int Length,
     string AssessmentMethod,
+    string Explanation,
     DateTime CreatedAtUtc);

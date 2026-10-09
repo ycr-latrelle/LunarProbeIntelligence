@@ -359,7 +359,12 @@ public sealed class ClaimAssessmentControllerTests
 
             const string modelContent =
                 """
-                {"relationshipType":"Context","explanation":"The passage discusses scientific evaluation but does not directly establish the claim."}
+                {
+                "relationshipType": "Context",
+                "explanation": "The passage discusses scientific evaluation but does not directly establish the claim.",
+                "evidenceStrength": "Insufficient",
+                "uncertainty": "Moderate"
+                }
                 """;
 
             var responseJson = JsonSerializer.Serialize(new

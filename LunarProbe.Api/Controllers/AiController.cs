@@ -59,7 +59,7 @@ public sealed class AiController(OllamaService ollamaService)
             return Ok(new
             {
                 researchQuestion = request.ResearchQuestion.Trim(),
-                model = "qwen3:4b-instruct",
+                model = ollamaService.ModelName,
                 analysis,
                 generatedAtUtc = DateTime.UtcNow
             });

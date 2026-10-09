@@ -1,4 +1,4 @@
-
+using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
 
@@ -10,6 +10,8 @@ public sealed class OllamaService(
 {
     private readonly string _model =
         configuration["Ollama:Model"] ?? "qwen3:4b-instruct";
+
+    public string ModelName => _model;
 
     public async Task<string> GenerateAsync(
         string prompt,
@@ -30,30 +32,54 @@ public sealed class OllamaService(
             Think = false,
             Options = new OllamaOptions
             {
-                NumPredict = 1024,
+                NumPredict = 256,
                 Temperature = 0
             }
         };
 
-        using var response = await httpClient.PostAsJsonAsync(
-            "/api/chat",
-            request,
-            cancellationToken);
+        var stopwatch = Stopwatch.StartNew();
 
-        response.EnsureSuccessStatusCode();
+        Console.WriteLine(
+            $"[Ollama] Sending request. Model={_model}, " +
+            $"Timeout={httpClient.Timeout}, NumPredict=256");
 
-        var result = await response.Content
-            .ReadFromJsonAsync<OllamaChatResponse>(
-                cancellationToken: cancellationToken);
-
-        if (result is null ||
-            string.IsNullOrWhiteSpace(result.Message?.Content))
+        try
         {
-            throw new InvalidOperationException(
-                "Ollama returned an empty response.");
-        }
+            using var response = await httpClient.PostAsJsonAsync(
+                "/api/chat",
+                request,
+                cancellationToken);
 
-        return result.Message.Content.Trim();
+            Console.WriteLine(
+                $"[Ollama] Response received after {stopwatch.Elapsed}. " +
+                $"HTTP={(int)response.StatusCode}");
+
+            response.EnsureSuccessStatusCode();
+
+            var result = await response.Content
+                .ReadFromJsonAsync<OllamaChatResponse>(
+                    cancellationToken: cancellationToken);
+
+            if (result is null ||
+                string.IsNullOrWhiteSpace(result.Message?.Content))
+            {
+                throw new InvalidOperationException(
+                    "Ollama returned an empty response.");
+            }
+
+            Console.WriteLine(
+                $"[Ollama] Completed after {stopwatch.Elapsed}.");
+
+            return result.Message.Content.Trim();
+        }
+        catch (TaskCanceledException ex)
+        {
+            Console.WriteLine(
+                $"[Ollama] Request canceled after {stopwatch.Elapsed}. " +
+                $"Timeout={httpClient.Timeout}. Error={ex.Message}");
+
+            throw;
+        }
     }
 
     private sealed class OllamaChatRequest

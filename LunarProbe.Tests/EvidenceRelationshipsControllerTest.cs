@@ -256,6 +256,8 @@ public sealed class EvidenceRelationshipsControllerTests
         var controller = new EvidenceRelationshipsController(dbContext);
 
         const string evidenceText = "Scientific claims are";
+        const string explanation =
+            "Reproducibility supports independent evaluation.";
 
         var result = await controller.Create(
             session.Id,
@@ -266,7 +268,8 @@ public sealed class EvidenceRelationshipsControllerTests
                 RelationshipType = "Supports",
                 EvidenceText = evidenceText,
                 StartOffset = 0,
-                AssessmentMethod = "LocalAI"
+                AssessmentMethod = "LocalAI",
+                Explanation = explanation
             },
             CancellationToken.None);
 
@@ -275,12 +278,13 @@ public sealed class EvidenceRelationshipsControllerTests
 
         Assert.Equal("LocalAI", response.AssessmentMethod);
         Assert.Equal(evidenceText, response.EvidenceText);
+        Assert.Equal(explanation, response.Explanation);
 
-        var saved = await dbContext.EvidenceRelationships
-            .SingleAsync();
+        var saved = await dbContext.EvidenceRelationships.SingleAsync();
 
         Assert.Equal(response.Id, saved.Id);
         Assert.Equal("LocalAI", saved.AssessmentMethod);
+        Assert.Equal(explanation, saved.Explanation);
     }
 
     [Fact]
@@ -342,6 +346,7 @@ public sealed class EvidenceRelationshipsControllerTests
             StartOffset = 0,
             Length = "Scientific claims are".Length,
             AssessmentMethod = "LocalAI",
+            Explanation = "Reproducibility supports independent evaluation.",
             CreatedAtUtc = DateTime.UtcNow
         };
 
@@ -366,6 +371,7 @@ public sealed class EvidenceRelationshipsControllerTests
         Assert.Equal(document.Id, response.EvidenceDocumentId);
         Assert.Equal("Supports", response.RelationshipType);
         Assert.Equal("Scientific claims are", response.EvidenceText);
+        Assert.Equal("Reproducibility supports independent evaluation.", response.Explanation);
         Assert.Equal("LocalAI", response.AssessmentMethod);
     }
 
@@ -432,5 +438,40 @@ public sealed class EvidenceRelationshipsControllerTests
         Assert.IsType<NotFoundObjectResult>(result);
     }
 
+
+    [Fact]
+    public async Task Create_RejectsLocalAIRelationshipWithoutExplanation()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+
+        var options = new DbContextOptionsBuilder<LpiDbContext>()
+            .UseSqlite(connection)
+            .Options;
+
+        await using var dbContext = new LpiDbContext(options);
+        await dbContext.Database.EnsureCreatedAsync();
+
+        var (session, document, claim) = await SeedDataAsync(dbContext);
+        var controller = new EvidenceRelationshipsController(dbContext);
+
+        var result = await controller.Create(
+            session.Id,
+            claim.Id,
+            new CreateEvidenceRelationshipRequest
+            {
+                EvidenceDocumentId = document.Id,
+                RelationshipType = "Supports",
+                EvidenceText = "Scientific claims are",
+                StartOffset = 0,
+                AssessmentMethod = "LocalAI"
+                // Explanation intentionally omitted.
+            },
+            CancellationToken.None);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+
+        Assert.Empty(await dbContext.EvidenceRelationships.ToListAsync());
+    }
 
 }

@@ -1,4 +1,3 @@
-
 using LunarProbe.Api.Models;
 using Microsoft.EntityFrameworkCore;
 
@@ -101,6 +100,9 @@ public class LpiDbContext(DbContextOptions<LpiDbContext> options)
             entity.Property(relationship => relationship.AssessmentMethod)
                 .IsRequired()
                 .HasMaxLength(50);
+
+            entity.Property(relationship => relationship.Explanation)
+                .IsRequired();
 
             entity.Property(relationship => relationship.StartOffset)
                 .IsRequired();

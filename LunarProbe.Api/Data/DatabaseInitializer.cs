@@ -1,4 +1,3 @@
-
 using Microsoft.EntityFrameworkCore;
 
 namespace LunarProbe.Api.Data;
@@ -9,6 +8,8 @@ public static class DatabaseInitializer
         LpiDbContext dbContext,
         CancellationToken cancellationToken = default)
     {
+        // Create the database and initial schema if they do not exist.
+        // This does not update tables in an existing database.
         await dbContext.Database.EnsureCreatedAsync(cancellationToken);
 
         await dbContext.Database.ExecuteSqlRawAsync(
@@ -91,6 +92,12 @@ public static class DatabaseInitializer
             """,
             cancellationToken);
 
+        // Safely add Explanation to an existing database if it is missing.
+        await EnsureExplanationColumnAsync(
+            dbContext,
+            cancellationToken);
+
+
         await dbContext.Database.ExecuteSqlRawAsync(
             """
             CREATE INDEX IF NOT EXISTS "IX_EvidenceRelationships_CandidateClaimId"
@@ -104,5 +111,66 @@ public static class DatabaseInitializer
             ON "EvidenceRelationships" ("EvidenceDocumentId");
             """,
             cancellationToken);
+    }
+
+    private static async Task EnsureExplanationColumnAsync(
+        LpiDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var connection = dbContext.Database.GetDbConnection();
+        var openedHere = connection.State !=
+            System.Data.ConnectionState.Open;
+
+        if (openedHere)
+        {
+            await dbContext.Database.OpenConnectionAsync(
+                cancellationToken);
+        }
+
+        try
+        {
+            await using var command = connection.CreateCommand();
+
+            command.CommandText =
+                """PRAGMA table_info("EvidenceRelationships");""";
+
+            await using var reader = await command.ExecuteReaderAsync(
+                cancellationToken);
+
+            var explanationExists = false;
+
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var columnName = reader.GetString(1);
+
+                if (string.Equals(
+                    columnName,
+                    "Explanation",
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    explanationExists = true;
+                    break;
+                }
+            }
+
+            await reader.DisposeAsync();
+
+            if (!explanationExists)
+            {
+                await dbContext.Database.ExecuteSqlRawAsync(
+                    """
+                    ALTER TABLE "EvidenceRelationships"
+                    ADD COLUMN "Explanation" TEXT NOT NULL DEFAULT '';
+                    """,
+                    cancellationToken);
+            }
+        }
+        finally
+        {
+            if (openedHere)
+            {
+                await dbContext.Database.CloseConnectionAsync();
+            }
+        }
     }
 }
