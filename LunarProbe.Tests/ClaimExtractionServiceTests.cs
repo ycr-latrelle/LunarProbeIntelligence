@@ -1,3 +1,4 @@
+
 using LunarProbe.Api.Models;
 using LunarProbe.Api.Services;
 using Xunit;
@@ -66,11 +67,9 @@ public class ClaimExtractionServiceTests
             Assert.True(claim.Length > 0);
             Assert.True(claim.StartOffset + claim.Length <= content.Length);
 
-            var originalText = content.Substring(
-                claim.StartOffset,
-                claim.Length);
-
-            Assert.Equal(claim.ClaimText, originalText);
+            Assert.Equal(
+                claim.ClaimText,
+                content.Substring(claim.StartOffset, claim.Length));
         }
     }
 
@@ -93,9 +92,7 @@ public class ClaimExtractionServiceTests
 
         Assert.All(
             claims,
-            claim => Assert.Equal(
-                documentId,
-                claim.EvidenceDocumentId));
+            claim => Assert.Equal(documentId, claim.EvidenceDocumentId));
     }
 
     [Fact]
@@ -108,9 +105,7 @@ public class ClaimExtractionServiceTests
             Content = "   "
         };
 
-        var claims = _service.ExtractClaims(document);
-
-        Assert.Empty(claims);
+        Assert.Empty(_service.ExtractClaims(document));
     }
 
     [Fact]
@@ -126,9 +121,7 @@ public class ClaimExtractionServiceTests
             Content = content
         };
 
-        var claims = _service.ExtractClaims(document);
-
-        var claim = Assert.Single(claims);
+        var claim = Assert.Single(_service.ExtractClaims(document));
 
         Assert.Equal(content, claim.ClaimText);
         Assert.Equal(0, claim.StartOffset);
@@ -148,9 +141,7 @@ public class ClaimExtractionServiceTests
             Content = content
         };
 
-        var claims = _service.ExtractClaims(document);
-
-        var claim = Assert.Single(claims);
+        var claim = Assert.Single(_service.ExtractClaims(document));
 
         Assert.Equal(content, claim.ClaimText);
         Assert.Equal(0, claim.StartOffset);
@@ -178,15 +169,11 @@ public class ClaimExtractionServiceTests
 
         Assert.Equal(
             claims[0].ClaimText,
-            content.Substring(
-                claims[0].StartOffset,
-                claims[0].Length));
+            content.Substring(claims[0].StartOffset, claims[0].Length));
 
         Assert.Equal(
             claims[1].ClaimText,
-            content.Substring(
-                claims[1].StartOffset,
-                claims[1].Length));
+            content.Substring(claims[1].StartOffset, claims[1].Length));
     }
 
     [Fact]
@@ -210,16 +197,10 @@ public class ClaimExtractionServiceTests
         var claims = _service.ExtractClaims(document);
 
         Assert.Equal(2, claims.Count);
-
         Assert.Equal(firstSentence, claims[0].ClaimText);
         Assert.Equal(secondSentence, claims[1].ClaimText);
 
-        foreach (var claim in claims)
-        {
-            Assert.Equal(
-                claim.ClaimText,
-                content.Substring(claim.StartOffset, claim.Length));
-        }
+        AssertExactSourceText(content, claims);
     }
 
     [Fact]
@@ -235,12 +216,188 @@ public class ClaimExtractionServiceTests
             Content = content
         };
 
-        var claims = _service.ExtractClaims(document);
-
-        var claim = Assert.Single(claims);
+        var claim = Assert.Single(_service.ExtractClaims(document));
 
         Assert.Equal(content, claim.ClaimText);
         Assert.Equal(0, claim.StartOffset);
         Assert.Equal(content.Length, claim.Length);
+    }
+
+    [Fact]
+    public void ExtractClaims_PreservesShortMeaningfulClaims()
+    {
+        var content = "Ice melts.";
+
+        var document = CreateDocument(content);
+
+        var claim = Assert.Single(_service.ExtractClaims(document));
+
+        Assert.Equal(content, claim.ClaimText);
+        Assert.Equal(0, claim.StartOffset);
+        Assert.Equal(content.Length, claim.Length);
+    }
+
+    [Fact]
+    public void ExtractClaims_PreservesShortUnpunctuatedCandidates()
+    {
+        var content = "Too short";
+
+        var document = CreateDocument(content);
+
+        var claim = Assert.Single(_service.ExtractClaims(document));
+
+        Assert.Equal(content, claim.ClaimText);
+        Assert.Equal(0, claim.StartOffset);
+        Assert.Equal(content.Length, claim.Length);
+    }
+
+    [Fact]
+    public void ExtractClaims_SplitsSeparateParagraphsWithoutPunctuation()
+    {
+        var first = "The sample was contaminated";
+        var second = "The result requires further review";
+        var content = first + "\n\n" + second;
+
+        var claims = _service.ExtractClaims(CreateDocument(content));
+
+        Assert.Equal(2, claims.Count);
+        Assert.Equal(first, claims[0].ClaimText);
+        Assert.Equal(second, claims[1].ClaimText);
+
+        Assert.Equal(0, claims[0].StartOffset);
+        Assert.Equal(first.Length + 2, claims[1].StartOffset);
+
+        AssertExactSourceText(content, claims);
+    }
+
+    [Fact]
+    public void ExtractClaims_SplitsBulletItemsAndExcludesMarkers()
+    {
+        var content =
+            "- Ice melts.\n" +
+            "- Water freezes.\n" +
+            "- Samples contain minerals.";
+
+        var claims = _service.ExtractClaims(CreateDocument(content));
+
+        Assert.Equal(3, claims.Count);
+        Assert.Equal("Ice melts.", claims[0].ClaimText);
+        Assert.Equal("Water freezes.", claims[1].ClaimText);
+        Assert.Equal("Samples contain minerals.", claims[2].ClaimText);
+
+        Assert.False(claims[0].ClaimText.StartsWith("-"));
+        Assert.False(claims[1].ClaimText.StartsWith("-"));
+        Assert.False(claims[2].ClaimText.StartsWith("-"));
+
+        AssertExactSourceText(content, claims);
+    }
+
+    [Fact]
+    public void ExtractClaims_SplitsNumberedListItems()
+    {
+        var content =
+            "1. Ice melts.\n" +
+            "2. Water freezes.";
+
+        var claims = _service.ExtractClaims(CreateDocument(content));
+
+        Assert.Equal(2, claims.Count);
+        Assert.Equal("Ice melts.", claims[0].ClaimText);
+        Assert.Equal("Water freezes.", claims[1].ClaimText);
+
+        AssertExactSourceText(content, claims);
+    }
+
+    [Fact]
+    public void ExtractClaims_PreservesRepeatedClaimsAsSeparateOccurrences()
+    {
+        var content = "Ice melts. Ice melts.";
+
+        var claims = _service.ExtractClaims(CreateDocument(content));
+
+        Assert.Equal(2, claims.Count);
+        Assert.Equal("Ice melts.", claims[0].ClaimText);
+        Assert.Equal("Ice melts.", claims[1].ClaimText);
+        Assert.NotEqual(claims[0].Id, claims[1].Id);
+
+        Assert.Equal(0, claims[0].StartOffset);
+        Assert.Equal(11, claims[1].StartOffset);
+
+        AssertExactSourceText(content, claims);
+    }
+
+    [Fact]
+    public void ExtractClaims_PreservesCurlyClosingQuotes()
+    {
+        var first =
+            "The report states “the sample was contaminated.”";
+        var second = "Another observation was recorded.";
+        var content = first + " " + second;
+
+        var claims = _service.ExtractClaims(CreateDocument(content));
+
+        Assert.Equal(2, claims.Count);
+        Assert.Equal(first, claims[0].ClaimText);
+        Assert.Equal(second, claims[1].ClaimText);
+
+        AssertExactSourceText(content, claims);
+    }
+
+    [Fact]
+    public void ExtractClaims_SkipsPunctuationOnlyCandidates()
+    {
+        var content = "... Ice melts. !!!";
+
+        var claims = _service.ExtractClaims(CreateDocument(content));
+
+        var claim = Assert.Single(claims);
+
+        Assert.Equal("Ice melts.", claim.ClaimText);
+        AssertExactSourceText(content, claims);
+    }
+
+    [Fact]
+    public void ExtractClaims_PreservesDocumentIdentityAndExtractionMethod()
+    {
+        var document = CreateDocument("Ice melts.");
+
+        var claim = Assert.Single(_service.ExtractClaims(document));
+
+        Assert.Equal(document.Id, claim.EvidenceDocumentId);
+        Assert.Equal("SentenceSegmentation", claim.ExtractionMethod);
+        Assert.NotEqual(Guid.Empty, claim.Id);
+    }
+
+    [Fact]
+    public void ExtractClaims_ThrowsForNullDocument()
+    {
+        Assert.Throws<ArgumentNullException>(
+            () => _service.ExtractClaims(null!));
+    }
+
+    private static EvidenceDocument CreateDocument(string content)
+    {
+        return new EvidenceDocument
+        {
+            Id = Guid.NewGuid(),
+            Title = "Claim Extraction Test",
+            Content = content
+        };
+    }
+
+    private static void AssertExactSourceText(
+        string content,
+        List<LunarProbe.Api.Models.CandidateClaim> claims)
+    {
+        foreach (var claim in claims)
+        {
+            Assert.True(claim.StartOffset >= 0);
+            Assert.True(claim.Length > 0);
+            Assert.True(claim.StartOffset + claim.Length <= content.Length);
+
+            Assert.Equal(
+                claim.ClaimText,
+                content.Substring(claim.StartOffset, claim.Length));
+        }
     }
 }

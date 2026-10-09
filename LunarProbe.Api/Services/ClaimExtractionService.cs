@@ -1,9 +1,12 @@
+
 using LunarProbe.Api.Models;
 
 namespace LunarProbe.Api.Services;
 
 public sealed class ClaimExtractionService
 {
+    private const string ExtractionMethodName = "SentenceSegmentation";
+
     private static readonly HashSet<string> CommonAbbreviations =
         new(StringComparer.OrdinalIgnoreCase)
         {
@@ -13,9 +16,21 @@ public sealed class ClaimExtractionService
             "No.", "Inc.", "Ltd.", "U.S."
         };
 
-    public List<CandidateClaim> ExtractClaims(
-        EvidenceDocument document)
+    private static readonly HashSet<char> ClosingCharacters =
+    [
+        '"', '\'', ')', ']', '}', '”', '’', '»',
+        '）', '】', '」', '』'
+    ];
+
+    private static readonly HashSet<char> BulletCharacters =
+    [
+        '-', '*', '•', '‣', '▪', '–', '—'
+    ];
+
+    public List<CandidateClaim> ExtractClaims(EvidenceDocument document)
     {
+        ArgumentNullException.ThrowIfNull(document);
+
         var claims = new List<CandidateClaim>();
         var content = document.Content;
 
@@ -24,17 +39,32 @@ public sealed class ClaimExtractionService
             return claims;
         }
 
-        var start = 0;
+        var start = SkipWhitespaceAndBulletMarker(content, 0);
 
-        for (var i = 0; i < content.Length; i++)
+        for (var i = start; i < content.Length; i++)
         {
-            if (content[i] is not '.' and not '!' and not '?')
+            var current = content[i];
+
+            // Paragraphs and consecutive bullet items can delimit
+            // candidates even when the preceding line has no punctuation.
+            if (current == '\n' &&
+                (IsBlankLineBoundary(content, i) ||
+                 IsNextLineBullet(content, i + 1)))
+            {
+                AddClaim(start, i);
+
+                start = SkipWhitespaceAndBulletMarker(content, i + 1);
+                i = start - 1;
+                continue;
+            }
+
+            if (current is not '.' and not '!' and not '?')
             {
                 continue;
             }
 
-            // A decimal point inside a number is not a sentence boundary.
-            if (content[i] == '.' &&
+            // Do not split decimal numbers such as 3.14.
+            if (current == '.' &&
                 i > 0 &&
                 i + 1 < content.Length &&
                 char.IsDigit(content[i - 1]) &&
@@ -43,8 +73,14 @@ public sealed class ClaimExtractionService
                 continue;
             }
 
-            // Recognized abbreviations and person initials are not boundaries.
-            if (content[i] == '.' &&
+            // Do not split numbered-list markers such as "1. First item".
+            if (current == '.' && IsNumberedListMarkerPeriod(content, i))
+            {
+                continue;
+            }
+
+            // Avoid splitting common abbreviations and personal initials.
+            if (current == '.' &&
                 (IsAbbreviationPeriod(content, i) ||
                  IsPersonInitialPeriod(content, i)))
             {
@@ -53,14 +89,14 @@ public sealed class ClaimExtractionService
 
             var end = i + 1;
 
-            // Include closing quotation marks or brackets in the sentence.
+            // Keep closing quotes and brackets with their sentence.
             while (end < content.Length &&
-                   content[end] is '"' or '\'' or ')' or ']' or '}')
+                   ClosingCharacters.Contains(content[end]))
             {
                 end++;
             }
 
-            // A sentence boundary normally ends before whitespace or EOF.
+            // Only treat punctuation as a boundary before whitespace or EOF.
             if (end < content.Length &&
                 !char.IsWhiteSpace(content[end]))
             {
@@ -68,22 +104,13 @@ public sealed class ClaimExtractionService
             }
 
             AddClaim(start, end);
-            start = end;
 
-            while (start < content.Length &&
-                   char.IsWhiteSpace(content[start]))
-            {
-                start++;
-            }
-
-            i = end - 1;
+            start = SkipWhitespaceAndBulletMarker(content, end);
+            i = start - 1;
         }
 
-        // Preserve a final sentence that has no terminal punctuation.
-        if (start < content.Length)
-        {
-            AddClaim(start, content.Length);
-        }
+        // Preserve a final candidate even when it lacks terminal punctuation.
+        AddClaim(start, content.Length);
 
         return claims;
 
@@ -108,8 +135,9 @@ public sealed class ClaimExtractionService
 
             var text = content[rawStart..rawEnd];
 
-            // Preserve the existing minimum-length behavior.
-            if (text.Length < 15)
+            // Ignore punctuation-only candidates, but do not discard
+            // legitimate short claims based on their character count.
+            if (!text.Any(char.IsLetterOrDigit))
             {
                 return;
             }
@@ -121,10 +149,169 @@ public sealed class ClaimExtractionService
                 ClaimText = text,
                 StartOffset = rawStart,
                 Length = text.Length,
-                ExtractionMethod = "SentenceSegmentation",
+                ExtractionMethod = ExtractionMethodName,
                 CreatedAtUtc = DateTime.UtcNow
             });
         }
+    }
+
+    private static int SkipWhitespaceAndBulletMarker(
+        string content,
+        int index)
+    {
+        while (index < content.Length &&
+               char.IsWhiteSpace(content[index]))
+        {
+            index++;
+        }
+
+        if (index >= content.Length)
+        {
+            return index;
+        }
+
+        var lineStart = index;
+
+        while (lineStart > 0 && content[lineStart - 1] != '\n')
+        {
+            lineStart--;
+        }
+
+        // Only remove a marker when everything before it on the line
+        // consists of whitespace.
+        for (var i = lineStart; i < index; i++)
+        {
+            if (!char.IsWhiteSpace(content[i]))
+            {
+                return index;
+            }
+        }
+
+        var markerEnd = index;
+
+        if (BulletCharacters.Contains(content[index]))
+        {
+            markerEnd = index + 1;
+        }
+        else if (char.IsDigit(content[index]))
+        {
+            var digitEnd = index;
+
+            while (digitEnd < content.Length &&
+                   char.IsDigit(content[digitEnd]))
+            {
+                digitEnd++;
+            }
+
+            if (digitEnd < content.Length &&
+                content[digitEnd] is '.' or ')' &&
+                (digitEnd + 1 == content.Length ||
+                 char.IsWhiteSpace(content[digitEnd + 1])))
+            {
+                markerEnd = digitEnd + 1;
+            }
+        }
+
+        if (markerEnd == index)
+        {
+            return index;
+        }
+
+        while (markerEnd < content.Length &&
+               content[markerEnd] is ' ' or '\t')
+        {
+            markerEnd++;
+        }
+
+        return markerEnd;
+    }
+
+    private static bool IsBlankLineBoundary(
+        string content,
+        int newlineIndex)
+    {
+        var next = newlineIndex + 1;
+
+        // Support Windows CRLF and Unix LF line endings.
+        while (next < content.Length &&
+               content[next] is ' ' or '\t' or '\r')
+        {
+            next++;
+        }
+
+        return next < content.Length && content[next] == '\n';
+    }
+
+    private static bool IsNextLineBullet(
+        string content,
+        int nextLineIndex)
+    {
+        while (nextLineIndex < content.Length &&
+               content[nextLineIndex] is ' ' or '\t' or '\r')
+        {
+            nextLineIndex++;
+        }
+
+        if (nextLineIndex >= content.Length)
+        {
+            return false;
+        }
+
+        if (BulletCharacters.Contains(content[nextLineIndex]))
+        {
+            return true;
+        }
+
+        if (!char.IsDigit(content[nextLineIndex]))
+        {
+            return false;
+        }
+
+        var digitEnd = nextLineIndex;
+
+        while (digitEnd < content.Length &&
+               char.IsDigit(content[digitEnd]))
+        {
+            digitEnd++;
+        }
+
+        return digitEnd < content.Length &&
+               content[digitEnd] is '.' or ')' &&
+               (digitEnd + 1 == content.Length ||
+                char.IsWhiteSpace(content[digitEnd + 1]));
+    }
+
+    private static bool IsNumberedListMarkerPeriod(
+        string content,
+        int periodIndex)
+    {
+        if (periodIndex == 0 ||
+            !char.IsDigit(content[periodIndex - 1]))
+        {
+            return false;
+        }
+
+        var tokenStart = periodIndex - 1;
+
+        while (tokenStart > 0 &&
+               char.IsDigit(content[tokenStart - 1]))
+        {
+            tokenStart--;
+        }
+
+        // A numbered-list marker must start the line, ignoring indentation.
+        for (var i = tokenStart - 1;
+             i >= 0 && content[i] != '\n';
+             i--)
+        {
+            if (!char.IsWhiteSpace(content[i]))
+            {
+                return false;
+            }
+        }
+
+        return periodIndex + 1 == content.Length ||
+               char.IsWhiteSpace(content[periodIndex + 1]);
     }
 
     private static bool IsAbbreviationPeriod(
@@ -146,7 +333,8 @@ public sealed class ClaimExtractionService
             return true;
         }
 
-        // Recognize the first period in e.g. and i.e.
+        // Recognize the first period in multi-period abbreviations
+        // such as e.g. and i.e.
         if (periodIndex + 2 < content.Length &&
             char.IsLetter(content[periodIndex + 1]) &&
             content[periodIndex + 2] == '.')
@@ -167,8 +355,6 @@ public sealed class ClaimExtractionService
         string content,
         int periodIndex)
     {
-        // An initial is one letter preceded by whitespace or the start
-        // of the document, followed by a period and whitespace.
         if (periodIndex == 0 ||
             !char.IsLetter(content[periodIndex - 1]))
         {
@@ -183,7 +369,6 @@ public sealed class ClaimExtractionService
             return false;
         }
 
-        // Require whitespace after the period.
         if (periodIndex + 1 >= content.Length ||
             !char.IsWhiteSpace(content[periodIndex + 1]))
         {
@@ -198,8 +383,6 @@ public sealed class ClaimExtractionService
             next++;
         }
 
-        // The next token should begin with an uppercase letter,
-        // as in "A. Smith".
         return next < content.Length &&
                char.IsUpper(content[next]);
     }
