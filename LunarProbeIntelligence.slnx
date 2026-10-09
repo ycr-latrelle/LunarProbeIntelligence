@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="LunarProbe.Api/LunarProbe.Api.csproj" />
+  <Project Path="LunarProbe.Tests/LunarProbe.Tests.csproj" />
+</Solution>
